@@ -90,7 +90,6 @@ func (s *ToolCallStreamer) OnMsg(call *schema.ToolCall) error {
 			s.Out <- "Tool call arguments:\n"
 		}
 		_, err := s.Writer.Write([]byte(call.Function.Arguments))
-
 		if err != nil {
 			if !errors.Is(err, ErrDecoderFailed) {
 				// reader is already closed due decoder error, we just silently ignore the error

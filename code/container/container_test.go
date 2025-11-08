@@ -121,7 +121,8 @@ func (s *ContextSuite) TestCodeContainer_Apply_InvalidPatch() {
 	output := CodeOutput{Patch: "invalid patch text"}
 	_, err := cc.Apply(output)
 	s.Require().Error(err)
-	s.Contains(err.Error(), "Patch text must start with")
+	// The srd parser auto-adds Begin/End Patch, so invalid content triggers "Unknown line" error
+	s.Contains(err.Error(), "Unknown line while parsing")
 }
 
 func (s *ContextSuite) TestCodeContainer_WriteToFiles_WithDeletes() {

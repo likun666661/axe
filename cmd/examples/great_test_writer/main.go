@@ -15,7 +15,7 @@ import (
 var instruction = `
 You review go test code to check that if it follows the following standards:
 1. use testify and testsuites.
-2. use testcontainers for starting dependencies like postgres, redis, etc.
+2. use testcontainers for starting dependencies like postgres, redis, etc if needed.
 3. table-driven tests.
 4. cover both external public functions and internal functions.
 5. cover both positive and negative cases.

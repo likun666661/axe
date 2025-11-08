@@ -1,4 +1,4 @@
-package v4a
+package srd
 
 // A self-contained pure-Go 1.20+ utility for applying human-readable
 // “pseudo-diff” patch files to a collection of text files.
@@ -167,13 +167,21 @@ func (p *Parser) parse() error {
 			if err != nil {
 				return err
 			}
-			if _, ok := p.CurrentFiles[path]; !ok {
-				return diffErrorf("Update File Error - missing file: %s", path)
+			// Allow update on non-existent files (will succeed if only additions)
+			text, fileExists := p.CurrentFiles[path]
+			if !fileExists {
+				text = ""
 			}
-			text := p.CurrentFiles[path]
 			action, err := p.parseUpdateFile(text)
 			if err != nil {
 				return err
+			}
+			// If file didn't exist and we have successful parse, convert to Add if appropriate
+			if !fileExists && isOnlyAdditions(action) {
+				content := buildContentFromAdditions(action)
+				action = PatchAction{Type: ActionAdd, NewFile: &content}
+			} else if !fileExists {
+				return diffErrorf("Update File Error - missing file: %s (and update contains context/deletions)", path)
 			}
 			action.MovePath = moveTo
 			p.Patch.Actions[path] = &action
@@ -201,9 +209,8 @@ func (p *Parser) parse() error {
 			if _, exists := p.Patch.Actions[path]; exists {
 				return diffErrorf("Duplicate add for file: %s", path)
 			}
-			if _, ok := p.CurrentFiles[path]; ok {
-				return diffErrorf("Add File Error - file already exists: %s", path)
-			}
+			// Allow Add File to rewrite existing files (Best Practice 3)
+			// This is preferred for complete file rewrites
 			action, err := p.parseAddFile()
 			if err != nil {
 				return err
@@ -229,56 +236,6 @@ func (p *Parser) parseUpdateFile(text string) (PatchAction, error) {
 	lines := strings.Split(text, "\n")
 	index := 0
 	for !p.isDone("*** End Patch", "*** Update File:", "*** Delete File:", "*** Add File:", "*** End of File") {
-		defStr, ok, err := p.readStr("@@ ")
-		if err != nil {
-			return action, err
-		}
-		sectionStr := ""
-		if !ok {
-			cl, err := p.curLine()
-			if err != nil {
-				return action, err
-			}
-			if norm(cl) == "@@" {
-				if s, err := p.readLine(); err != nil {
-					return action, err
-				} else {
-					sectionStr = s
-				}
-			}
-		}
-
-		if defStr == "" && sectionStr == "" && index != 0 {
-			cl, _ := p.curLine()
-			return action, diffErrorf("Invalid line in update section:\n%s", cl)
-		}
-
-		if strings.TrimSpace(defStr) != "" {
-			found := false
-			// strict pass: search only after current index if not already in prefix
-			if !sliceContains(lines[:index], defStr) {
-				for i := index; i < len(lines); i++ {
-					if lines[i] == defStr {
-						index = i + 1
-						found = true
-						break
-					}
-				}
-			}
-			// loose pass: ignore surrounding whitespace
-			if !found && !sliceContainsTrim(lines[:index], defStr) {
-				for i := index; i < len(lines); i++ {
-					if strings.TrimSpace(lines[i]) == strings.TrimSpace(defStr) {
-						index = i + 1
-						p.Fuzz += 1
-						found = true
-						break
-					}
-				}
-			}
-			// If still not found, that's okay; we rely on context next.
-		}
-
 		nextCtx, chunks, endIdx, eof, err := peekNextSection(p.Lines, p.Index)
 		if err != nil {
 			return action, err
@@ -310,8 +267,16 @@ func (p *Parser) parseAddFile() (PatchAction, error) {
 		if err != nil {
 			return PatchAction{}, err
 		}
+
+		// Silently skip @@ lines for error tolerance
+		normalized := norm(s)
+		if strings.HasPrefix(normalized, "@@") || normalized == "@@" {
+			continue
+		}
+
+		// For error tolerance, if line doesn't start with +, prepend it
 		if !strings.HasPrefix(s, "+") {
-			return PatchAction{}, diffErrorf("Invalid Add File line (missing '+'): %s", s)
+			s = "+" + s
 		}
 		lines = append(lines, s[1:]) // strip leading '+'
 	}
@@ -323,25 +288,51 @@ func (p *Parser) parseAddFile() (PatchAction, error) {
 //  Helper functions
 // --------------------------------------------------------------------------- //
 
+// isOnlyAdditions checks if an update action contains only additions (no deletions or context needed)
+func isOnlyAdditions(action PatchAction) bool {
+	if action.Type != ActionUpdate {
+		return false
+	}
+	for _, chunk := range action.Chunks {
+		if len(chunk.DelLines) > 0 {
+			return false
+		}
+		// If OrigIndex > 0, it means there's context before it
+		if chunk.OrigIndex > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// buildContentFromAdditions extracts all additions from an update action to create file content
+func buildContentFromAdditions(action PatchAction) string {
+	var lines []string
+	for _, chunk := range action.Chunks {
+		lines = append(lines, chunk.InsLines...)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func findContextCore(lines, context []string, start int) (int, int) {
 	if len(context) == 0 {
 		return start, 0
 	}
-	// Strict match
+	// Strip match (primary - always ignore whitespace for context lines)
 	for i := start; i+len(context) <= len(lines); i++ {
-		if slicesEqual(lines[i:i+len(context)], context) {
+		if slicesEqualStrip(lines[i:i+len(context)], context) {
 			return i, 0
 		}
 	}
-	// rstrip match
+	// rstrip match (fallback)
 	for i := start; i+len(context) <= len(lines); i++ {
 		if slicesEqualRStrip(lines[i:i+len(context)], context) {
 			return i, 1
 		}
 	}
-	// strip match
+	// Strict match (last resort)
 	for i := start; i+len(context) <= len(lines); i++ {
-		if slicesEqualStrip(lines[i:i+len(context)], context) {
+		if slicesEqual(lines[i:i+len(context)], context) {
 			return i, 100
 		}
 	}
@@ -388,7 +379,6 @@ func peekNextSection(lines []string, index int) ([]string, []Chunk, int, bool, e
 		s := norm(raw) // normalize for sentinel checks
 
 		if startsWithAny(s,
-			"@@",
 			"*** End Patch",
 			"*** Update File:",
 			"*** Delete File:",
@@ -400,9 +390,19 @@ func peekNextSection(lines []string, index int) ([]string, []Chunk, int, bool, e
 		if s == "***" {
 			break
 		}
-		if strings.HasPrefix(s, "***") {
-			return nil, nil, 0, false, diffErrorf("Invalid Line: %s", raw)
+
+		// Silently skip @@ lines for error tolerance
+		if strings.HasPrefix(s, "@@") || s == "@@" {
+			index++
+			continue
 		}
+
+		// Silently skip lines starting with *** that we don't recognize (error tolerance)
+		if strings.HasPrefix(s, "***") {
+			index++
+			continue
+		}
+
 		index++
 
 		lastMode := mode
@@ -411,6 +411,12 @@ func peekNextSection(lines []string, index int) ([]string, []Chunk, int, bool, e
 		if line == "" {
 			line = " "
 		}
+
+		// Skip empty or whitespace-only lines for error tolerance
+		if len(line) == 0 {
+			continue
+		}
+
 		switch line[0] {
 		case '+':
 			mode = ModeAdd
@@ -419,7 +425,9 @@ func peekNextSection(lines []string, index int) ([]string, []Chunk, int, bool, e
 		case ' ':
 			mode = ModeKeep
 		default:
-			return nil, nil, 0, false, diffErrorf("Invalid Line: %s", raw)
+			// For error tolerance, treat unrecognized lines as context lines
+			mode = ModeKeep
+			line = " " + line
 		}
 		line = line[1:]
 
@@ -508,8 +516,14 @@ func patchToCommit(patch Patch, orig map[string]string) (Commit, error) {
 			if action.NewFile == nil {
 				return Commit{}, diffErrorf("ADD action without file content")
 			}
+			// Support Add action to rewrite existing files (Best Practice 3)
+			var oldContent *string
+			if existing, exists := orig[path]; exists {
+				oldContent = &existing
+			}
 			commit.Changes[path] = FileChange{
 				Type:       ActionAdd,
+				OldContent: oldContent,
 				NewContent: action.NewFile,
 			}
 		case ActionUpdate:
@@ -536,9 +550,17 @@ func patchToCommit(patch Patch, orig map[string]string) (Commit, error) {
 
 func textToPatch(text string, orig map[string]string) (Patch, int, error) {
 	lines := splitLinesLikePython(text) // preserves blank lines, no strip()
-	if len(lines) < 2 || !strings.HasPrefix(norm(lines[0]), "*** Begin Patch") || norm(lines[len(lines)-1]) != "*** End Patch" {
-		return Patch{}, 0, diffErrorf("Invalid patch text - missing sentinels")
+
+	// Auto-append Begin Patch if missing
+	if len(lines) == 0 || !strings.HasPrefix(norm(lines[0]), "*** Begin Patch") {
+		lines = append([]string{"*** Begin Patch"}, lines...)
 	}
+
+	// Auto-append End Patch if missing
+	if len(lines) == 0 || norm(lines[len(lines)-1]) != "*** End Patch" {
+		lines = append(lines, "*** End Patch")
+	}
+
 	parser := &Parser{
 		CurrentFiles: orig,
 		Lines:        lines,
@@ -592,7 +614,9 @@ func loadFiles(paths []string, openFn OpenFn) (map[string]string, error) {
 	for _, p := range paths {
 		txt, err := openFn(p)
 		if err != nil {
-			return nil, err
+			// File doesn't exist - that's ok, Update File might only have additions
+			// We'll validate later if the operation is valid for missing files
+			continue
 		}
 		m[p] = txt
 	}
@@ -640,11 +664,11 @@ func processPatch(
 	writeFn WriteFn,
 	removeFn RemoveFn,
 ) (string, error) {
-	if !strings.HasPrefix(text, "*** Begin Patch") {
-		return "", diffErrorf("Patch text must start with *** Begin Patch")
-	}
 	paths := identifyFilesNeeded(text)
-	orig, err := loadFiles(paths, openFn)
+	// Also load files being Added (Best Practice 3: Add can rewrite existing files)
+	addPaths := identifyFilesAdded(text)
+	allPaths := append(paths, addPaths...)
+	orig, err := loadFiles(allPaths, openFn)
 	if err != nil {
 		return "", err
 	}
@@ -744,23 +768,4 @@ func slicesEqualStrip(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func sliceContains(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
-func sliceContainsTrim(ss []string, s string) bool {
-	t := strings.TrimSpace(s)
-	for _, v := range ss {
-		if strings.TrimSpace(v) == t {
-			return true
-		}
-	}
-	return false
 }

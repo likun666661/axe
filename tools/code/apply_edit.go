@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	cont "github.com/stumble/axe/code/container"
+	"github.com/stumble/axe/code/srd"
 )
 
 const (
@@ -21,7 +22,11 @@ const (
 )
 
 //go:embed apply_edit.md
-var ApplyEditDoc string
+var applyEditDoc string
+
+func ApplyEditDoc() string {
+	return applyEditDoc + "\n\n" + srd.Prompt
+}
 
 // ApplyEditTool applies a CodeOutput XML to an in-memory CodeContainer and persists changes to disk.
 //
@@ -46,7 +51,7 @@ func (t *ApplyEditTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 			"code_output": {
 				Type:     schema.String,
 				Required: true,
-				Desc:     "v4a diff text format string of CodeOutput edits to apply.",
+				Desc:     "SRD diff text format string of CodeOutput edits to apply.",
 			},
 		}),
 	}, nil
@@ -77,7 +82,10 @@ func (t *ApplyEditTool) InvokableRun(ctx context.Context, argumentsInJSON string
 
 	co, err := cont.ParseCodeOutput(xmlPayload)
 	if err != nil {
-		return fmt.Sprintf("apply_edit: failed to parse CodeOutput XML: %v", err), nil
+		// just use the payload as is
+		co = cont.CodeOutput{
+			Patch: xmlPayload,
+		}
 	}
 
 	msg, err := t.Code.Apply(co)

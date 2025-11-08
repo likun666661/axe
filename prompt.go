@@ -41,7 +41,7 @@ CodeOutput XML schema:
 	instruction := strings.TrimSpace(strings.Join(r.Instructions, "\n"))
 	vars := map[string]any{
 		"apply_tool":             code.ApplyEditToolName,
-		"code_output_xml_schema": code.ApplyEditDoc,
+		"code_output_xml_schema": code.ApplyEditDoc(),
 		"finalize_tool":          finalize.FinalizeToolName,
 		"instruction":            instruction,
 		"code_input":             codeInputXML,

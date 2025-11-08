@@ -10,7 +10,7 @@ package container
 //   source of truth during an editing session.
 // - CodeInput: XML serialization of selected files, with file contents wrapped
 //   in CDATA to preserve exact text.
-// - CodeOutput: XML describing edits; v4a diff text format.
+// - CodeOutput: XML describing edits; SRD diff text format.
 //
 // Typical usage
 // 1) Load files from the file system into a CodeContainer.
@@ -26,7 +26,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/stumble/axe/code/v4a"
+	"github.com/stumble/axe/code/srd"
 )
 
 // CodeContainer holds an in-memory mapping of file paths to contents and offers
@@ -128,7 +128,7 @@ func (c *CodeContainer) Remove(path string) error {
 
 // Apply applies a CodeOutput to the container, mutating its files. Returns a message.
 func (c *CodeContainer) Apply(output CodeOutput) (string, error) {
-	return v4a.ApplyPatch(c, output.Patch)
+	return srd.ApplyPatch(c, output.Patch)
 }
 
 // WriteToFiles applies all changes to the container to the file system.
@@ -233,7 +233,7 @@ func (f CodeFile) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	return e.EncodeElement(payload, xml.StartElement{Name: xml.Name{Local: "File"}})
 }
 
-// The Code Output context is xml struct for all updated code files. It is a simple v4a diff text format.
+// The Code Output context is xml struct for all updated code files. It is a simple SRD diff text format.
 // Example:
 // <CodeOutput version="first_draft">
 // *** Begin Patch
