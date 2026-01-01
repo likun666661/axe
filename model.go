@@ -15,6 +15,8 @@ type ModelName string
 
 const (
 	ModelGPT5      ModelName = "gpt-5"
+	ModelGPT5_1    ModelName = "gpt-5.1"
+	ModelGPT5_2    ModelName = "gpt-5.2"
 	ModelGPT4o     ModelName = "gpt-4o"
 	ModelGPT4Dot1  ModelName = "gpt-4.1"
 	ModelGPT4oMini ModelName = "gpt-4o-mini"
@@ -35,17 +37,28 @@ func newChatModel(ctx context.Context, desiredModel ModelName) (model.ToolCallin
 	if baseURL == "" {
 		baseURL = openAIDefaultBaseURL
 	}
-	temp := float32(0)
-	if desiredModel == ModelGPT5 {
-		temp = 1.0
+	var config *einoopenai.ChatModelConfig
+
+	if desiredModel == ModelGPT5 || desiredModel == ModelGPT5_1 || desiredModel == ModelGPT5_2 {
+		// GPT-5, GPT-5.1 and GPT-5.2 have special beta restrictions
+		// Don't pass any parameters, let API use default values
+		config = &einoopenai.ChatModelConfig{
+			APIKey:  apiKey,
+			BaseURL: baseURL,
+			Model:   string(desiredModel),
+		}
+	} else {
+		// Other models use default configuration
+		temp := float32(0.0)
+		config = &einoopenai.ChatModelConfig{
+			APIKey:      apiKey,
+			BaseURL:     baseURL,
+			Model:       string(desiredModel),
+			Temperature: &temp,
+		}
 	}
 
-	chatModel, err := einoopenai.NewChatModel(ctx, &einoopenai.ChatModelConfig{
-		APIKey:      apiKey,
-		BaseURL:     baseURL,
-		Model:       string(desiredModel),
-		Temperature: &temp,
-	})
+	chatModel, err := einoopenai.NewChatModel(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("axe: create chat model: %w", err)
 	}
